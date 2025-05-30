@@ -69,95 +69,152 @@ def save_fsd_content(blob_name, content):
     blob_client = container_client.get_blob_client(blob_name)
     blob_client.upload_blob(content, overwrite=True)
 
+
 # Initialize session state
-if "step" not in st.session_state:
-    st.session_state.step = 1
+if 'page' not in st.session_state:
+    st.session_state.page = 'page1'
+if 'doc_name' not in st.session_state:
+    st.session_state.doc_name = ''
+if 'subFormName' not in st.session_state:
+    st.session_state.subFormName = ''
 
-# Enforce navigation rules
-if st.session_state.step == 2 and not st.session_state.get("fsd_output"):
-    st.session_state.step = 1
 
-steps = ["1. Upload Document", "2. FSD Agent", "3. TDD Agent", "4.Code Generator"]
-st.title("Report Generator")
+#PAGE 1
+def page1():
+    st.title("Page 1: Select a Project")
+    if st.button("Project FYR"):
+        st.session_state.doc_name = "Project FYR"
+        st.session_state.page = 'page2'
+        st.rerun()
+    if st.button("Project Bronco"):
+        st.session_state.doc_name = "Project Bronco"
+        st.session_state.page = 'page2'
+        st.rerun()
 
-# Display step indicator
-st.markdown("---")
-cols = st.columns(len(steps))
-for idx, col in enumerate(cols):
-    with col:
-        step_label = steps[idx]
-        color = "#4CAF50" if idx + 1 <= st.session_state.step else "#cccccc"
-        st.markdown(f"<div style='text-align: center; padding: 8px; background-color: {color}; color: white; border-radius: 5px;'>{step_label}</div>", unsafe_allow_html=True)
-st.markdown("---")
 
-# Step 1: Upload
-if st.session_state.step == 1:
-    st.header("Step 1: Upload Form Document")
-    uploaded_file = st.file_uploader("Upload PDF", type=["pdf"])
+# PAGE 2
+def page2():
+    st.title("Page 2: Project Details")
+    st.write(f"Selected Project: **{st.session_state.doc_name}**")
+    if st.button("Generate HC-E"):
+        st.session_state.subFormName = "HC -E"
+        st.session_state.page = 'page3'
+        st.rerun()
+    if st.button("Generate HC-D"):
+        st.session_state.subFormName = "HC -D"
+        st.session_state.page = 'page3'
+        st.rerun()
 
-    if uploaded_file:
-        blob_name = uploaded_file.name
-        container_client.upload_blob(blob_name, uploaded_file, overwrite=True)
-        st.success("File uploaded successfully and stored in Azure Blob!")
+    if st.button("<- Back"):
+        st.session_state.page = 'page1'
+        st.rerun()
 
-        # show_pdf(uploaded_file)
 
-        if st.button("Analyze with FSD Agent"):
-            with st.spinner("Analyzing document using FSD Agent..."):
-                pdf_text = extract_pdf_text(uploaded_file)
-                existing_fsd = get_fsd_content(blob_name.replace(".pdf", "_fsd.txt"))
-                fsd_output = call_fsd_agent(pdf_text, existing_fsd)
+# PAGE3
+def page3():
+    # Initialize session state
+    if "step" not in st.session_state:
+        st.session_state.step = 1
+    print(st.session_state.doc_name)
+    print(st.session_state.subFormName)
 
-                save_fsd_content(blob_name.replace(".pdf", "_fsd.txt"), fsd_output)
-                st.session_state.fsd_output = fsd_output
-                st.session_state.pdf_blob_name = blob_name
-                st.session_state.step = 2
+
+    # Enforce navigation rules
+    if st.session_state.step == 2 and not st.session_state.get("fsd_output"):
+        st.session_state.step = 1
+
+    steps = ["1. Upload Document", "2. FSD Agent", "3. TDD Agent", "4.Code Generator"]
+    st.title("Report Generator")
+
+    # Display step indicator
+    st.markdown("---")
+    cols = st.columns(len(steps))
+    for idx, col in enumerate(cols):
+        with col:
+            step_label = steps[idx]
+            color = "#4CAF50" if idx + 1 <= st.session_state.step else "#cccccc"
+            st.markdown(f"<div style='text-align: center; padding: 8px; background-color: {color}; color: white; border-radius: 5px;'>{step_label}</div>", unsafe_allow_html=True)
+    st.markdown("---")
+
+    # Step 1: Upload
+    if st.session_state.step == 1:
+        st.header("Step 1: Upload Form Document")
+        uploaded_file = st.file_uploader("Upload PDF", type=["pdf"])
+
+        if uploaded_file:
+            blob_name = uploaded_file.name
+            container_client.upload_blob(blob_name, uploaded_file, overwrite=True)
+            st.success("File uploaded successfully and stored in Azure Blob!")
+
+            # show_pdf(uploaded_file)
+
+            if st.button("Analyze with FSD Agent"):
+                with st.spinner("Analyzing document using FSD Agent..."):
+                    pdf_text = extract_pdf_text(uploaded_file)
+                    existing_fsd = get_fsd_content(blob_name.replace(".pdf", "_fsd.txt"))
+                    fsd_output = call_fsd_agent(pdf_text, existing_fsd)
+
+                    save_fsd_content(blob_name.replace(".pdf", "_fsd.txt"), fsd_output)
+                    st.session_state.fsd_output = fsd_output
+                    st.session_state.pdf_blob_name = blob_name
+                    st.session_state.step = 2
+                    st.rerun()
+
+        col1, col2 = st.columns([1, 6])
+        with col1:
+            if st.session_state.step > 1:
+                if st.button("<- Back"):
+                    st.session_state.step -= 1
+                    st.rerun()
+
+        with col2:
+            if st.session_state.get("fsd_output"):
+                if st.button("Next ->"):
+                    st.session_state.step = 2
+                    st.rerun()
+
+
+
+
+    # Step 2: FSD Agent Output
+    elif st.session_state.step == 2:
+        st.header("Step 2: FSD Agent Response")
+        st.text_area("FSD Agent Generated Output", st.session_state.get("fsd_output", ""), height=400)
+
+        col1, col2 = st.columns([1, 6])
+        with col1:
+            if st.button("<- Back"):
+                st.session_state.step = 1
                 st.rerun()
 
-    col1, col2 = st.columns([1, 6])
-    with col1:
-        if st.session_state.step > 1:
+        with col2:
+            if st.button("Agree with AI & Proceed to TDD Agent"):
+                st.session_state.step = 3
+                st.rerun()
+
+    # Step 3: TDD Agent Placeholder
+    elif st.session_state.step == 3:
+        st.header("Step 3: TDD Agent Output")
+        st.info("To be implemented")
+
+        col1, col2 = st.columns([1, 6])
+        with col1:
             if st.button("⬅️ Back"):
-                st.session_state.step -= 1
-                st.rerun()
-
-    with col2:
-        if st.session_state.get("fsd_output"):
-            if st.button("Next ➡️"):
                 st.session_state.step = 2
                 st.rerun()
 
+    # Step 4: Generate Code Placeholder
+    elif st.session_state.step == 4:
+        st.header("Step 4: Generate Code")
+        st.info("We'll implement this after Step 3!")
 
+    if st.button("<- Back"):
+        st.session_state.page = 'page2'
+        st.rerun()
 
-
-# Step 2: FSD Agent Output
-elif st.session_state.step == 2:
-    st.header("Step 2: FSD Agent Response")
-    st.text_area("FSD Agent Generated Output", st.session_state.get("fsd_output", ""), height=400)
-
-    col1, col2 = st.columns([1, 6])
-    with col1:
-        if st.button("⬅️ Back"):
-            st.session_state.step = 1
-            st.rerun()
-
-    with col2:
-        if st.button("Agree with AI & Proceed to TDD Agent"):
-            st.session_state.step = 3
-            st.rerun()
-
-# Step 3: TDD Agent Placeholder
-elif st.session_state.step == 3:
-    st.header("Step 3: TDD Agent Output")
-    st.info("To be implemented")
-
-    col1, col2 = st.columns([1, 6])
-    with col1:
-        if st.button("⬅️ Back"):
-            st.session_state.step = 2
-            st.rerun()
-
-# Step 4: Generate Code Placeholder
-elif st.session_state.step == 4:
-    st.header("Step 4: Generate Code")
-    st.info("We'll implement this after Step 3!")
+if st.session_state.page == 'page1':
+    page1()
+elif st.session_state.page == 'page2':
+    page2()
+elif st.session_state.page == 'page3':
+    page3()
