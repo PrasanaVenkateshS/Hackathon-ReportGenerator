@@ -1,23 +1,31 @@
 import streamlit as st
-from azure.storage.blob import BlobServiceClient
+from azure.storage.blob import BlobServiceClient, BlobSasPermissions, generate_blob_sas
 import os
 import PyPDF2
 from openai import AzureOpenAI
 import base64
 import pymssql
 import hashlib
+from datetime import datetime, timedelta
+import requests
 
 #STORAGE_ACCOUNT creds
-AZURE_CONNECTION_STRING = "<CONN-STRING>"
-CONTAINER_NAME = "<CONTAINER_NAME>"
-BLOB_NAME="<DATA_DICT_DOC_NAME>"
-blob_service_client = BlobServiceClient.from_connection_string(AZURE_CONNECTION_STRING)
-container_client = blob_service_client.get_container_client(CONTAINER_NAME)
+AZURE_CONNECTION_STRING = "<YOUR _CONN>"
+CONTAINER_NAME = "<YOUR_CONTAINER>"
+DATA_DICTIONARY="data_dictionary.txt"
+STORAGE_ACCOUNT="<YOUR_STORAGE_ACCOUNT>"
+STORAGE_ACCOUNT_KEY="<YOUR_KEY>"
+LOGICAPP_URL = "<YOUR_URL>"
+DB_SERVER_URL="<YOUR_DB_SERVER_URL>"
+DB_NAME="<DB>"
+DB_USERNAME="<DB_USER>"
+DB_PASSWORD="<DB_PWD>"
+
 
 # FSD agent creds
-endpoint = "<AGENT_END_POINT>"
+endpoint = "<YOUR_END_POINT>"
 deployment = "gpt-4o-mini"
-subscription_key = "<AGENT_KEY>"
+subscription_key = "<YOUR_KEY>"
 api_version = "2024-12-01-preview"
 
 fsd_client = AzureOpenAI(
@@ -26,6 +34,9 @@ fsd_client = AzureOpenAI(
     api_key=subscription_key,
 )
 
+blob_service_client = BlobServiceClient.from_connection_string(AZURE_CONNECTION_STRING)
+container_client = blob_service_client.get_container_client(CONTAINER_NAME)
+
 # Initialize session state
 if 'page' not in st.session_state:
     st.session_state.page = 'login'
@@ -33,6 +44,31 @@ if 'doc_name' not in st.session_state:
     st.session_state.doc_name = ''
 if 'subFormName' not in st.session_state:
     st.session_state.subFormName = ''
+
+#Get document url for sending as email attchment
+def generate_blob_sas_url(blob_name):
+    sas_token = generate_blob_sas(
+        account_name=STORAGE_ACCOUNT,
+        container_name=CONTAINER_NAME,
+        blob_name=blob_name,
+        account_key=STORAGE_ACCOUNT_KEY,
+        permission=BlobSasPermissions(read=True),
+        expiry=datetime.utcnow() + timedelta(hours=1)
+    )
+    return f"https://uploadeddocumentstore.blob.core.windows.net/files/{blob_name}?{sas_token}"
+
+#Triiger Email via LogicApps
+def send_email_via_logicapps(email, subject, message, blob_url, doc_name):
+    payload = {
+        "document_name": doc_name,
+        "email": email,
+        "subject": subject,
+        "message": message,
+        "blob_url": blob_url
+    }
+    headers = {"Content-Type": "application/json"}
+    response = requests.post(LOGICAPP_URL, json=payload, headers=headers)
+    return response.status_code in [200, 202]
 
 def show_pdf(file):
     file.seek(0)
@@ -44,30 +80,12 @@ def show_pdf(file):
     st.markdown(pdf_display, unsafe_allow_html=True)
     file.seek(0)
 
-def get_fsd_content(blob_name):
-    fsd_blob_name = blob_name.replace(".pdf", "_fsd.txt")
+def get_content(blob_name):
+    fsd_blob_name = blob_name
     try:
         blob_client = container_client.get_blob_client(fsd_blob_name)
         fsd_bytes = blob_client.download_blob().readall()
         return fsd_bytes.decode("utf-8")
-    except Exception:
-        return ""
-
-def get_tdd_content(blob_name):
-    tdd_blob_name = blob_name.replace(".pdf", "_tdd.txt")
-    try:
-        blob_client = container_client.get_blob_client(tdd_blob_name)
-        tdd_bytes = blob_client.download_blob().readall()
-        return tdd_bytes.decode("utf-8")
-    except Exception:
-        return ""
-
-def get_code_content(blob_name):
-    tdd_blob_name = blob_name.replace(".pdf", "_code.txt")
-    try:
-        blob_client = container_client.get_blob_client(code_blob_name)
-        code_bytes = blob_client.download_blob().readall()
-        return code_bytes.decode("utf-8")
     except Exception:
         return ""
 
@@ -125,10 +143,9 @@ def save_content(blob_name, content):
     blob_client = container_client.get_blob_client(blob_name)
     blob_client.upload_blob(content, overwrite=True)
 
-
-def get_blob_text():
+def get_data_dictionary_text():
     blob_service_client = BlobServiceClient.from_connection_string(AZURE_CONNECTION_STRING)
-    blob_client = blob_service_client.get_blob_client(container=CONTAINER_NAME, blob=BLOB_NAME)
+    blob_client = blob_service_client.get_blob_client(container=CONTAINER_NAME, blob=DATA_DICTIONARY)
     return blob_client.download_blob().readall().decode("utf-8")
 
 # Hashing passwords
@@ -137,13 +154,9 @@ def hash_password(password):
 
 # Database connection
 def get_connection():
-    server = '<SERVER_URL>'
-    database = '<DB_NAME>'
-    username = '<Username>'
-    password = '<DB_Password>'
-    conn = pymssql.connect(server=server, user=username, password=password, database=database)
-
+    conn = pymssql.connect(server=DB_SERVER_URL, user=DB_USERNAME, password=DB_PASSWORD, database=DB_NAME)
     return conn
+
 # Check if user exists
 def user_exists(username):
     conn = get_connection()
@@ -175,7 +188,7 @@ def login_user(username, password):
     conn.close()
     return result is not None
 
-# Main Streamlit app
+# Login Page
 def login():
     st.set_page_config(page_title="Login System", layout="centered")
     st.title("Login / Signup Page")
@@ -252,7 +265,7 @@ def page3():
     if st.session_state.step == 2 and not st.session_state.get("fsd_output"):
         st.session_state.step = 1
 
-    steps = ["1. Upload Document", "2. FSD Agent", "3. TDD Agent", "4.Code Generator"]
+    steps = ["1. Provide Email", "2. FSD Agent", "3. TDD Agent", "4.Code Generator"]
     st.title("Report Generator")
 
     # Display step indicator
@@ -267,27 +280,30 @@ def page3():
 
     # Step 1: Upload
     if st.session_state.step == 1:
-        st.header("Step 1: Upload Form Document")
-        uploaded_file = st.file_uploader("Upload PDF", type=["pdf"])
+        # st.header("Step 1: Upload Form Document")
+        # uploaded_file = st.file_uploader("Upload PDF", type=["pdf"])
 
-        if uploaded_file:
-            blob_name = uploaded_file.name
-            container_client.upload_blob(blob_name, uploaded_file, overwrite=True)
-            st.success("File uploaded successfully and stored in Azure Blob!")
+        st.session_state.fsd_email = st.text_input("Email Address of FSD Reviewer")
+        st.session_state.tdd_email = st.text_input("Email Address of TDD Reviewer")
+        st.session_state.code_email = st.text_input("Email Address of Code Reviewer")
+
+        blob_name="HC-E_Form.pdf"
 
             # show_pdf(uploaded_file)
 
-            if st.button("Analyze with FSD Agent"):
-                with st.spinner("Analyzing document using FSD Agent..."):
-                    pdf_text = extract_pdf_text(uploaded_file)
-                    existing_fsd = get_fsd_content(blob_name.replace(".pdf", "_fsd.txt"))
-                    fsd_output = call_fsd_agent(pdf_text, existing_fsd)
+        if st.button("Analyze with FSD Agent"):
+            with st.spinner("Analyzing document using FSD Agent..."):
+                # pdf_text = extract_pdf_text(uploaded_file)
+                pdf_text=get_content(blob_name)
+                print(pdf_text)
+                existing_fsd = get_content(blob_name.replace(".pdf", "_fsd.txt"))
+                fsd_output = call_fsd_agent(pdf_text, existing_fsd)
 
-                    save_content(blob_name.replace(".pdf", "_fsd.txt"), fsd_output)
-                    st.session_state.fsd_output = fsd_output
-                    st.session_state.pdf_blob_name = blob_name
-                    st.session_state.step = 2
-                    st.rerun()
+                save_content(blob_name.replace(".pdf", "_fsd.txt"), fsd_output)
+                st.session_state.fsd_output = fsd_output
+                st.session_state.pdf_blob_name = blob_name
+                st.session_state.step = 2
+                st.rerun()
 
         col1, col2 = st.columns([1, 6])
         with col1:
@@ -309,7 +325,18 @@ def page3():
     elif st.session_state.step == 2:
         st.header("Step 2: FSD Agent Response")
         st.text_area("FSD Agent Generated Output", st.session_state.get("fsd_output", ""), height=400)
-
+        
+        if st.button("Send FSD Email"): 
+            blob_url = generate_blob_sas_url(st.session_state.pdf_blob_name.replace(".pdf", "_fsd.txt"))
+            if send_email_via_logicapps(
+                st.session_state.fsd_email,
+                subject="FSD Document Generated",
+                message="Please review the attached FSD document.",
+                blob_url=blob_url,
+                doc_name=st.session_state.pdf_blob_name.replace(".pdf", "_fsd.txt")
+            ):
+                st.info(f"An email has been sent to {st.session_state.fsd_email}.")
+        
         col1, col2 = st.columns([1, 6])
         with col1:
             if st.button("<- Back"):
@@ -319,8 +346,8 @@ def page3():
         with col2:
             if st.button("Agree with AI & Proceed to TDD Agent"):
                 with st.spinner("Analyzing document using TDD Agent..."):
-                    data_dict_text = get_blob_text()
-                    existing_tdd = get_tdd_content(st.session_state.pdf_blob_name.replace(".pdf", "_tdd.txt"))
+                    data_dict_text = get_data_dictionary_text()
+                    existing_tdd = get_content(st.session_state.pdf_blob_name.replace(".pdf", "_tdd.txt"))
                     tdd_output = call_tdd_agent(data_dict_text, existing_tdd, st.session_state.get("fsd_output", ""))
 
                     save_content(st.session_state.pdf_blob_name.replace(".pdf", "_tdd.txt"), tdd_output)
@@ -334,6 +361,17 @@ def page3():
         st.header("Step 3: TDD Agent Output")
         st.text_area("TDD Agent Generated Output", st.session_state.get("tdd_output", ""), height=400)
 
+        if st.button("Send TDD Email"): 
+            blob_url = generate_blob_sas_url(st.session_state.pdf_blob_name.replace(".pdf", "_tdd.txt"))
+            if send_email_via_logicapps(
+                st.session_state.tdd_email,
+                subject="TDD Document Generated",
+                message="Please review the attached TDD document.",
+                blob_url=blob_url,
+                doc_name=st.session_state.pdf_blob_name.replace(".pdf", "_tdd.txt")
+            ):
+                st.info(f"An email has been sent to {st.session_state.tdd_email}.")
+
         col1, col2 = st.columns([1, 6])
         with col1:
             if st.button("Back"):
@@ -343,8 +381,8 @@ def page3():
         with col2:
             if st.button("Agree with AI & Proceed to Code Agent"):
                 with st.spinner("Analyzing document using Code Agent..."):
-                    data_dict_text = get_blob_text()
-                    existing_tdd = get_tdd_content(st.session_state.pdf_blob_name.replace(".pdf", "_tdd.txt"))
+                    data_dict_text = get_data_dictionary_text()
+                    existing_tdd = get_content(st.session_state.pdf_blob_name.replace(".pdf", "_tdd.txt"))
                     code_output = call_code_agent(data_dict_text, existing_tdd, st.session_state.get("fsd_output", ""))
 
                     save_content(st.session_state.pdf_blob_name.replace(".pdf", "_code.txt"), code_output)
@@ -356,6 +394,19 @@ def page3():
     elif st.session_state.step == 4:
         st.header("Step 4: Code Agent Output")
         st.text_area("Code Agent Generated Output", st.session_state.get("code_output", ""), height=400)
+
+
+        if st.button("Send Code to Email"): 
+            blob_url = generate_blob_sas_url(st.session_state.pdf_blob_name.replace(".pdf", "_code.txt"))
+            if send_email_via_logicapps(
+                st.session_state.code_email,
+                subject="Code Generated",
+                message="Please review the attached Code document.",
+                blob_url=blob_url,
+                doc_name=st.session_state.pdf_blob_name.replace(".pdf", "_code.txt")
+            ):
+                st.info(f"An email has been sent to {st.session_state.code_email}.")
+
 
         col1, col2 = st.columns([1, 6])
         with col1:
