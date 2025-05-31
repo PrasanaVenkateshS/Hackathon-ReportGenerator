@@ -2,3 +2,5 @@ streamlit
 azure-storage-blob
 PyPDF2
 base64
+openai
+pymysql
