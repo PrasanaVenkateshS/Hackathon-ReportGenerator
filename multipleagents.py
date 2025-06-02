@@ -193,134 +193,66 @@ for agent, roles_duties in training_prompts.items():
 ########################################################################################################################################################################################################################
 #Actual Agent Process Begins Steps in the Excels No - 2
 ########################################################################################################################################################################################################################
-
-def jira_creation(project_name, file_list, jira_flag=False):
-    from pathlib import Path
-
-    # === 1. Load agent metadata ===
-    with open("persistent_agents_metadata.json") as f:
-        agent_data = json.load(f)
-
-    if "RS_Agent" not in agent_data:
-        raise ValueError("RS_Agent not found in metadata.")
-
-    # === 2. Setup RS_Agent info ===
-    rs_agent_info = agent_data["RS_Agent"]
-    agent_id = rs_agent_info["agent_id"]
-    thread_id = rs_agent_info["thread_id"]
-
-    # === 3. If jira_flag is True: skip upload, just send a message ===
-    if jira_flag:
-        user_prompt = (
-            f'For project {project_name},please provide a comprehensive list of the all schedules or templates including specific templates in the FR Y-9C report. The output should have 5 columns - 1 - template code including report name,  2 - template name including report name, 3 - one line description of the template, 4 - JIRA short title with atleast 10 words including column 1 and the words "report automation tasks". I must want output to be in a JSON format, where keys are the first column described above, with remaining columns are values only display JSON output, nothing else.'
-        )
-
-        project_client.agents.create_message(thread_id=thread_id, role="user", content=user_prompt)
-        run = project_client.agents.create_run(thread_id=thread_id, agent_id=agent_id)
-
-        wait_for_run_completion(project_client, thread_id, run["id"])
-        response = get_last_assistant_response(project_client, thread_id)
-
-        print(f"\n[RS_Agent Response - Jira Task]:\n{response}\n")
-        return response
-
-    # === 4. Otherwise, perform full upload & update ===
-    existing_files = rs_agent_info.get("files", [])
-    full_new_paths = [os.path.join(project_name, f) for f in file_list]
-    all_files = list(set(existing_files + full_new_paths))  # remove duplicates
-
-    file_ids = []
-    for full_path in all_files:
-        if not os.path.exists(full_path):
-            print(f"[Warning] File not found: {full_path}")
-            continue
-
-        ext = Path(full_path).suffix.lower()
-        supported_ext = [
-            ".c", ".cpp", ".cs", ".css", ".doc", ".docx", ".go", ".html", ".java",
-            ".js", ".json", ".md", ".pdf", ".php", ".pptx", ".py", ".rb", ".sh", ".tex", ".ts", ".txt"
-        ]
-
-        if ext in supported_ext:
-            file_id = project_client.agents.upload_file_and_poll(
-                file_path=full_path, purpose=FilePurpose.AGENTS
-            ).id
-            file_ids.append(file_id)
-        else:
-            print(f"[Skipped] Unsupported file type: {full_path}")
-
-    if file_ids:
-        vector_store = project_client.agents.create_vector_store_and_poll(
-            file_ids=file_ids,
-            name=f"RS_Agent_vectorstore_{int(time.time())}"
-        )
-
-        file_tool = FileSearchTool(vector_store_ids=[vector_store.id])
-
-        project_client.agents.update_agent(
-            agent_id=agent_id,
-            tools=file_tool.definitions,
-            tool_resources=file_tool.resources
-        )
-
-        agent_data["RS_Agent"]["vector_store_id"] = vector_store.id
-        agent_data["RS_Agent"]["files"] = all_files
-        agent_data["RS_Agent"].pop("vector_store_ids", None)
-
-        with open("persistent_agents_metadata.json", "w") as f:
-            json.dump(agent_data, f, indent=4)
-
-        print(f"[Success] RS_Agent updated with new vector store and {len(file_ids)} total files.")
-    else:
-        print("[Info] No valid files uploaded. Vector store not updated.")
-
-    user_prompt = (
-        f'You are working on project {project_name}. The attached documents are instructions for regulatory reports. '
-        f'Your scope is only limited to the documents I have attached or information I have provided. '
-        f'This report is applicable for our organization. For now, review the documents. '
-        f'I will come back with project-specific tasks when ready. Reply with OKAY only.'
-    )
-
-    project_client.agents.create_message(thread_id=thread_id, role="user", content=user_prompt)
-    run = project_client.agents.create_run(thread_id=thread_id, agent_id=agent_id)
-
-    wait_for_run_completion(project_client, thread_id, run["id"])
-    response = get_last_assistant_response(project_client, thread_id)
-
-    print(f"\n[RS_Agent Response]:\n{response}\n")
-    return response
-
-
-jira_creation("FRY9C", ["FR_Y-9C20250327_i.pdf","FR_Y-9C20250327_f.pdf"])
-
-jira_creation("FRY9C", ["FR_Y-9C20250327_i.pdf","FR_Y-9C20250327_f.pdf"], True)
-
-
-def process_jira_task(jira_name, jira_id):
-    # === 1. Load RS_Agent metadata ===
-    with open("persistent_agents_metadata.json") as f:
-        agent_data = json.load(f)
-
-    if "RS_Agent" not in agent_data:
-        raise ValueError("RS_Agent not found in metadata.")
-
-    rs_agent_info = agent_data["RS_Agent"]
-    agent_id = rs_agent_info["agent_id"]
-    thread_id = rs_agent_info["thread_id"]
-
-    # === 2. Construct custom prompt using JIRA inputs ===
-    user_prompt = (
-        f'for project "FRY9C" , Schedule associated with "{jira_name}" Before you proceed look in your memory for the entity structure and chart of account. You are helping business system analyst create a detailed business requirement document with functional specifications. Remember that the business system analyst has very limited understand of regulatory reporting requirements or transformations, hence help business system analyst with maximum information. Review the entity structure and identify which set of entities should be excluded or included based on the jurisdiction and structure, also review the reporting requirements of the project to identify the reporting scope. Similarly, use chart of accounts to propose what how the data can be filtered for this specific JIRA. Review all the line items which need to be reported, and provided detailed interpretation which is applicable to the institution. Propose actual transformation, filter and validation rules for the BSA to document. Also provide snippets of reporting instructions and reporting form as additional information for BA as they do not have that information, provide all your reponses in well structured JSON, you must respond in JSON format only.'
-    )
-
-    # === 3. Send message and get agent response ===
-    project_client.agents.create_message(thread_id=thread_id, role="user", content=user_prompt)
-    run = project_client.agents.create_run(thread_id=thread_id, agent_id=agent_id)
-
-    wait_for_run_completion(project_client, thread_id, run["id"])
-    response = get_last_assistant_response(project_client, thread_id)
-
-    print(f"\n[RS_Agent Response for {jira_id} - {jira_name}]:\n{response}\n")
-    return response
-
-process_jira_task('Schedule_HC_E','1')
+#
+# import os
+# import json
+# from azure.identity import DefaultAzureCredential
+# from azure.ai.projects import AIProjectClient
+# from azure.ai.projects.models import FilePurpose
+# from typing import List
+#
+# def upload_files_to_existing_vectorstore(roject_name, file_paths):
+#     # Load metadata to find RS_Agent vector store
+#     audit_file = "persistent_agents_metadata.json"
+#     if not os.path.exists(audit_file):
+#         raise FileNotFoundError("Agent metadata file not found.")
+#
+#     with open(audit_file) as f:
+#         agent_data = json.load(f)
+#
+#     if "RS_Agent" not in agent_data:
+#         raise ValueError("RS_Agent not found in metadata.")
+#
+#     rs_agent_meta = agent_data["RS_Agent"]
+#     vector_store_id = rs_agent_meta.get("vector_store_id")
+#
+#     if not vector_store_id:
+#         raise ValueError("RS_Agent does not have a vector store ID.")
+#
+#     # Create project client
+#     project_client = AIProjectClient.from_connection_string(
+#         credential=DefaultAzureCredential(),
+#         conn_str=os.getenv("PROJECT_CONNECTION_STRING")
+#     )
+#
+#     # Upload supported files
+#     file_ids = []
+#     with project_client:
+#         for path in c:
+#             ext = os.path.splitext(path)[1].lower()
+#             if ext in [
+#                 ".c", ".cpp", ".cs", ".css", ".doc", ".docx", ".go", ".html", ".java",
+#                 ".js", ".json", ".md", ".pdf", ".php", ".pptx", ".py", ".rb", ".sh", ".tex", ".ts", ".txt"
+#             ]:
+#                 file_obj = project_client.agents.upload_file_and_poll(file_path=path, purpose=FilePurpose.AGENTS)
+#                 file_ids.append(file_obj.id)
+#                 print(f"[Uploaded] {path}")
+#             else:
+#                 print(f"[Skipped] {path} is not a supported file type.")
+#
+#         if not file_ids:
+#             print("[No valid files uploaded.]")
+#             return
+#
+#         # Add to existing vector store
+#         project_client.agents.add_files_to_vector_store_and_poll(
+#             vector_store_id=vector_store_id,
+#             file_ids=file_ids
+#         )
+#
+#         print(f"[{project_name}] Files successfully added to RS_Agent vector store.")
+#
+#
+# upload_files_to_existing_vectorstore('FRY9C',["FR_Y-9C20250327_f.pdf", "FR_Y-9C20250327_i.pdf"])
+# Example usage (after defining):
+# upload_files_to_existing_vectorstore(["new_file1.txt", "new_file2.pdf"], "Q2_Enhancement")
